@@ -79,4 +79,46 @@ A Flask app that counts page visits in Redis. It has two dependencies, Flask (se
 |---|---|
 | Multi-stage Dockerfile | The builder stage installs the Python packages. The final stage starts from a clean base and copies only the installed packages with `COPY --from=builder`, so pip caches and build leftovers are discarded. |
 | Minimal image footprint | `python:3.12-slim` base, `pip install --no-cache-dir`, a `.dockerignore`, and `requirements.txt` copied before the source code so the dependency layer is cached. Result: **191 MB on disk, 46.1 MB compressed**. |
-| Secure environment variables | The Dockerfile holds only non-secret defaults. Real values are loaded at run time from `.env` through `env_file`. `.env` is excluded by `.gitignore` and `.dockerignore`, and
+| Secure environment variables | The Dockerfile holds only non-secret defaults. Real values are loaded at run time from `.env` through `env_file`. `.env` is excluded by `.gitignore` and `.dockerignore`, and only `.env.example` is committed. |
+| Least privilege | The container runs as the non-root user `appuser`. |
+| Functional port routing | `8000:8000` maps the host port to Gunicorn. Redis publishes no port and is reachable only on the internal Compose network. |
+
+### Dockerfile Design
+
+```dockerfile
+# Stage 1: builder, installs dependencies
+FROM python:3.12-slim AS builder
+WORKDIR /build
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# Stage 2: final, small runtime image
+FROM python:3.12-slim
+WORKDIR /app
+RUN useradd -r -u 1001 appuser
+COPY --from=builder /install /usr/local
+COPY app.py .
+USER appuser
+ENV APP_NAME=myapp REDIS_HOST=redis
+EXPOSE 8000
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "app:app"]
+```
+
+### How to Run
+
+```bash
+git clone https://github.com/hafizmazeem/devops-assignment.git
+cd devops-assignment/app
+cp .env.example .env
+docker build -t myapp:1.0 .
+docker compose up -d
+curl localhost:8000
+curl localhost:8000/health
+```
+
+To stop and clean up: `docker compose down`
+
+### Result
+The multi-dependency stack builds and runs from a single command. The final image is small, runs as a non-root user, keeps its configuration out of the image and out of Git, and exposes only the one port it needs.
+
+---
